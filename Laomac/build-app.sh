@@ -54,8 +54,11 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# 把优化脚本打包进 app, 供「完整优化脚本」功能调用
-if [ -f ../macos-optimize.sh ]; then
+# 把优化脚本打包进 app, 供「完整优化脚本」功能调用 (优先仓库内副本, 兼容旧的上级目录布局)
+if [ -f macos-optimize.sh ]; then
+    cp macos-optimize.sh "$APP_DIR/Contents/Resources/macos-optimize.sh"
+    chmod +x "$APP_DIR/Contents/Resources/macos-optimize.sh"
+elif [ -f ../macos-optimize.sh ]; then
     cp ../macos-optimize.sh "$APP_DIR/Contents/Resources/macos-optimize.sh"
     chmod +x "$APP_DIR/Contents/Resources/macos-optimize.sh"
 fi
