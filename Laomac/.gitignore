@@ -1,0 +1,17 @@
+# 构建产物
+.build/
+dist/
+
+# 编译出的本地二进制
+smctool
+fanverify
+aeptest
+
+# 本地签名材料 (含私钥, 严禁提交)
+signing/
+*.keychain-db
+
+# 系统/编辑器杂项
+.DS_Store
+*.xcuserstate
+.swiftpm/
