@@ -48,7 +48,7 @@ func runPriv(_ cmd: String) -> String {
     return String(data: out, encoding: .utf8) ?? ""
 }
 
-let tool = "/Users/qq/Documents/Dev/mac/Laomac/dist/Laomac.app/Contents/Resources/smctool"
+let tool = "/Users/qq/Documents/Dev/mac/dist/Laomac.app/Contents/Resources/smctool"
 
 print("── 1. 提权身份 (uid/euid) ──")
 print(runPriv("id"))
