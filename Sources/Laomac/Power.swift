@@ -180,10 +180,12 @@ final class PowerService: ObservableObject {
             let current = intV("AppleRawCurrentCapacity") ?? 0
             b.percent = b.maxCapacity > 0 ? Double(current) / Double(b.maxCapacity) * 100 : 0
             b.cycleCount = intV("CycleCount") ?? 0
+            if b.cycleCount >= 65534 { b.cycleCount = -1 }      // 0xFFFF 为仪表未知哨兵值 (本机实测会出现)
             b.temperature = Double(intV("Temperature") ?? 0) / 100
             b.voltage = Double(intV("Voltage") ?? 0) / 1000
             b.amperage = Double(intV("InstantAmperage") ?? 0) / 1000
             b.timeRemaining = intV("TimeRemaining") ?? 0
+            if b.timeRemaining >= 65534 { b.timeRemaining = 0 } // 同上: 未知时归零, 界面显示"计算中"
             if let r = out.range(of: "\"Watts\"=(\\d+)", options: .regularExpression) {
                 b.adapterWatts = Int(out[r].filter(\.isNumber)) ?? 0
             }

@@ -57,6 +57,12 @@ struct PowerView: View {
                         .font(.callout.weight(.medium))
                     Text(timeText)
                         .font(.caption).foregroundColor(.secondary)
+                    // 接了电源却没充电属于异常状态 (温度保护/适配器故障/需重置 SMC), 主动提示
+                    if info.externalConnected && !info.isCharging && !info.fullyCharged && info.percent < 95 {
+                        Label("已接电源但未充电 — 若持续如此, 请检查适配器/线缆或重置 SMC",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundColor(.orange)
+                    }
                 }
             }
             Divider()
@@ -89,7 +95,7 @@ struct PowerView: View {
             }
             InfoRow(label: "满充容量", value: "\(info.maxCapacity) mAh")
             InfoRow(label: "设计容量", value: "\(info.designCapacity) mAh")
-            InfoRow(label: "循环计数", value: "\(info.cycleCount) 次")
+            InfoRow(label: "循环计数", value: info.cycleCount >= 0 ? "\(info.cycleCount) 次" : "-- (仪表未知)")
             InfoRow(label: "电池温度", value: String(format: "%.1f ℃", info.temperature))
             InfoRow(label: "电压", value: String(format: "%.3f V", info.voltage))
             InfoRow(label: "电流", value: String(format: "%.2f A", info.amperage))
