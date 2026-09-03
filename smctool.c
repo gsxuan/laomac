@@ -96,7 +96,8 @@ static int smc_read(uint32_t key, uint8_t *bytes, uint32_t *size) {
     *size = (uint32_t)out.keyInfo.dataSize;
 
     memset(&in, 0, sizeof(in));
-    memset(&out, 0, sizeof(out));
+    memset(&out, 0, sizeof(out));   // 必须清零: 响应结构不保证全字段回填,
+                                     // 残留上次调用数据会把 1 字节键误读出垃圾值 (CHBI 曾误读 3328)
     in.key = key;
     in.data8 = SMC_CMD_READ_BYTES;
     // T2 机型要求 READ_BYTES 固定请求 32 字节缓冲区, 传实际键长会失败
@@ -445,21 +446,36 @@ int main(int argc, char **argv) {
         if (argc >= 3 && strcmp(argv[2], "auto") == 0) {
             return set_fan_auto();
         }
-        if (argc < 4) {
-            fprintf(stderr, "用法: smctool fanset <风扇编号> <RPM> | smctool fanset auto\n");
+        // 两种用法 (风扇号仅 0~3 而 RPM ≥800, 值域互斥可无歧义区分):
+        //   fanset <风扇编号> <RPM>     argc==4 且第二参数 ≤3 → 单风扇定速 (兼容旧用法)
+        //   fanset <RPM> <RPM> ...      其它情况 → 第 N 个参数 = 风扇 N 的目标转速
+        // 多参数形式供曲线/批量定速使用, 单进程一次写入全部风扇, 避免逐次启动的竞争与 shell 拼接限制
+        if (argc == 4) {
+            long v2 = strtol(argv[2], NULL, 10);
+            if (v2 >= 0 && v2 < MAX_FANS) {
+                int rpm = atoi(argv[3]);
+                if (rpm < 800 || rpm > 12000) {
+                    fprintf(stderr, "RPM 需在 800~12000\n");
+                    return 2;
+                }
+                return set_fan_manual((int)v2, rpm);
+            }
+        }
+        if (argc < 3) {
+            fprintf(stderr, "用法: smctool fanset <风扇编号> <RPM> | smctool fanset <RPM> ... | smctool fanset auto\n");
             return 2;
         }
-        int idx = atoi(argv[2]);
-        int rpm = atoi(argv[3]);
-        if (idx < 0 || idx >= MAX_FANS) {
-            fprintf(stderr, "风扇编号需在 0~%d\n", MAX_FANS - 1);
-            return 2;
+        int ret = 0;
+        for (int i = 0; i < argc - 2 && i < MAX_FANS; i++) {
+            int rpm = atoi(argv[2 + i]);
+            if (rpm < 800 || rpm > 12000) {
+                fprintf(stderr, "风扇%d: RPM 需在 800~12000\n", i);
+                ret = 2;
+                continue;
+            }
+            if (set_fan_manual(i, rpm)) ret = 4;
         }
-        if (rpm < 800 || rpm > 12000) {
-            fprintf(stderr, "RPM 需在 800~12000\n");
-            return 2;
-        }
-        return set_fan_manual(idx, rpm);
+        return ret;
     }
 
     if (argc < 3) {
@@ -497,6 +513,24 @@ int main(int argc, char **argv) {
             return 2;
         }
         if (smc_write_ui8(str_to_key(argv[2]), (uint8_t)v)) {
+            fprintf(stderr, "写入 %s 失败 (该机型可能不支持此键)\n", argv[2]);
+            return 4;
+        }
+        printf("ok\n");
+    } else if (strcmp(argv[1], "write16") == 0) {
+        // 2 字节大端写入: 部分机型 (如 T2) 的 CHBI 等键为 i16 宽度,
+        // ui8 写入宽度不匹配会被 SMC 忽略, 导致开关类功能静默失效
+        if (argc < 4) {
+            fprintf(stderr, "缺少写入值\n");
+            return 2;
+        }
+        int v = atoi(argv[3]);
+        if (v < 0 || v > 65535) {
+            fprintf(stderr, "写入值需在 0~65535\n");
+            return 2;
+        }
+        uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t)(v & 0xff) };
+        if (smc_write_n(str_to_key(argv[2]), b, 2)) {
             fprintf(stderr, "写入 %s 失败 (该机型可能不支持此键)\n", argv[2]);
             return 4;
         }

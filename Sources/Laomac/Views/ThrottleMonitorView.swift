@@ -54,15 +54,16 @@ struct ThrottleMonitorView: View {
              subtitle: PrivilegedTool.installed
                  ? "特权组件已安装, 风扇操作不再需要密码"
                  : "smctool 直写 SMC; 特权组件安装前需管理员授权") {
-            InfoRow(label: "当前模式", value: app.throttle.fan.currentMode)
-            if app.throttle.fan.available {
-                if !app.throttle.fan.currentRPMs.isEmpty {
+            let fan = app.throttle.fan
+            InfoRow(label: "当前模式", value: fan.currentMode)
+            if fan.available {
+                if !fan.currentRPMs.isEmpty {
                     InfoRow(label: "实时转速",
-                            value: app.throttle.fan.currentRPMs.enumerated()
+                            value: fan.currentRPMs.enumerated()
                                 .map { "风扇\($0.offset): \($0.element) rpm" }.joined(separator: "  "))
                 }
                 Toggle("降频时自动拉满风扇", isOn: Binding(
-                    get: { app.throttle.fan.isEnabled },
+                    get: { fan.isEnabled },
                     set: { _ in app.throttle.toggleFan() }
                 ))
                 .toggleStyle(.switch)
@@ -73,11 +74,97 @@ struct ThrottleMonitorView: View {
                     Button("恢复自动调速") { app.throttle.fanNormalSpeed() }
                         .buttonStyle(.bordered)
                 }
-                Text("手动定速/联动期间风扇不受系统控制; 恢复自动后交还 SMC 调速。重启后 SMC 自动复位为自动模式。")
+
+                Divider().padding(.vertical, 2)
+                manualSection(fan)
+                Divider().padding(.vertical, 2)
+                curveSection(fan)
+
+                Text("手动定速/曲线/联动期间风扇不受系统控制; 恢复自动后交还 SMC 调速。三种手动模式互斥, 后启用者生效; 重启后 SMC 复位为自动, 曲线开关随 app 启动自动恢复。")
                     .font(.caption2).foregroundColor(.secondary)
             } else {
                 Text("未找到 smctool, 请用 ./build-app.sh 打包后使用")
                     .font(.caption).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    // MARK: 手动定速 (每风扇一个滑杆)
+
+    private func manualSection(_ fan: FanController) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("手动定速").font(.callout.weight(.medium))
+            ForEach(Array(0..<max(fan.fanCount, 1)), id: \.self) { i in
+                let maxRPM = fan.maxRPMs.count > i ? Double(fan.maxRPMs[i]) : 6000
+                HStack(spacing: 8) {
+                    Text("风扇\(i)")
+                        .font(.caption).foregroundColor(.secondary)
+                        .frame(width: 40, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { fan.manualTargets.count > i ? fan.manualTargets[i] : 2500 },
+                        set: { v in
+                            while fan.manualTargets.count <= i { fan.manualTargets.append(2500) }
+                            fan.manualTargets[i] = v
+                        }
+                    ), in: 1200...maxRPM, step: 50)
+                    Text("\(Int(fan.manualTargets.count > i ? fan.manualTargets[i] : 2500)) rpm")
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 72, alignment: .trailing)
+                }
+            }
+            Button("按滑杆值定速") { app.throttle.fanApplyManual() }
+                .buttonStyle(.bordered)
+        }
+    }
+
+    // MARK: 温控曲线 (温度 → 转速 插值)
+
+    private func curveSection(_ fan: FanController) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("温控曲线 (按 CPU 温度自动调速)", isOn: Binding(
+                get: { fan.curveOn },
+                set: { app.throttle.fanToggleCurve($0) }
+            ))
+            .toggleStyle(.switch)
+
+            if fan.curveOn {
+                if let t = fan.curveTemp {
+                    InfoRow(label: "曲线采样温度", value: String(format: "%.1f ℃ → 目标 %@ rpm",
+                            t, NSNumber(value: fan.interpolate(temp: t))))
+                }
+                ForEach(Array(fan.curvePoints.indices), id: \.self) { i in
+                    VStack(spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text("点\(i + 1) 温度")
+                                .font(.caption).foregroundColor(.secondary)
+                                .frame(width: 56, alignment: .leading)
+                            Slider(value: Binding(
+                                get: { fan.curvePoints[i].temp },
+                                set: { fan.curvePoints[i].temp = $0 }
+                            ), in: 30...100, step: 1)
+                            Text("\(Int(fan.curvePoints[i].temp))℃")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 48, alignment: .trailing)
+                        }
+                        HStack(spacing: 8) {
+                            Text("      转速")
+                                .font(.caption).foregroundColor(.secondary)
+                                .frame(width: 56, alignment: .leading)
+                            Slider(value: Binding(
+                                get: { fan.curvePoints[i].rpm },
+                                set: { fan.curvePoints[i].rpm = $0 }
+                            ), in: 1200...6000, step: 100)
+                            Text("\(Int(fan.curvePoints[i].rpm)) rpm")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 72, alignment: .trailing)
+                        }
+                    }
+                }
+                Button("恢复默认曲线") { fan.curvePoints = FanController.defaultCurve }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Text("每 5 秒采样一次, 点间线性插值, 转速变化 ≥150 rpm 才写入 (防抖)。")
+                    .font(.caption2).foregroundColor(.secondary)
             }
         }
     }

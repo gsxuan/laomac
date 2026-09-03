@@ -144,7 +144,8 @@ final class PowerService: ObservableObject {
         runSmc("read CHBI") { [weak self] r in
             guard let self else { return }
             let v = Int(r.text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-            if r.ok, v != 0 {
+            // 只读状态键机型上非 0 不一定代表禁充 (可能是充电请求回显), 仅 0/1 语义值才当作禁充标志
+            if r.ok, v != 0, v <= 1 {
                 NSLog("[Laomac] 检测到残留禁充状态, 自动恢复充电")
                 self.chargeInhibited = true
                 self.setChargeInhibited(false)
@@ -279,7 +280,8 @@ final class PowerService: ObservableObject {
 
     func setChargeInhibited(_ on: Bool) {
         limitLoading = true
-        runSmc("write CHBI \(on ? 1 : 0)") { [weak self] r in
+        // CHBI 在部分机型 (含 T2) 为 i16 宽度, ui8 写入会被忽略; 个别机型该键只读则写入失败并在界面提示
+        runSmc("write16 CHBI \(on ? 1 : 0)") { [weak self] r in
             guard let self = self else { return }
             self.limitLoading = false
             if r.ok {
@@ -312,7 +314,7 @@ final class PowerService: ObservableObject {
         guard target != chargeInhibited || force else { return }
         limitLoading = true
         let on = target ? 1 : 0
-        runSmc("write CHBI \(on)") { [weak self] r in
+        runSmc("write16 CHBI \(on)") { [weak self] r in
             guard let self = self else { return }
             self.limitLoading = false
             if r.ok {
