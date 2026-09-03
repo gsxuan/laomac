@@ -118,7 +118,14 @@ else
         git commit -m "release: $TAG" >/dev/null
     fi
     git tag -a "$TAG" -m "$APP_NAME $VER"
-    git push origin "$TAG"
+    # 网络抖动的常见表现是单次 push 失败, 重试三次再报错, 避免白跑一轮编译
+    PUSHED=0
+    for try in 1 2 3; do
+        if git push origin "$TAG"; then PUSHED=1; break; fi
+        echo "    tag 推送失败, 第 $try 次重试..."
+        sleep 15
+    done
+    [ "$PUSHED" = 1 ] || { echo "错误: tag $TAG 推不上去, 请网络恢复后重跑本脚本"; exit 1; }
     echo "==> 已推送 tag $TAG"
 fi
 

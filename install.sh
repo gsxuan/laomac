@@ -73,6 +73,14 @@ flush_priv() {
     rm -f "$GUI_SCRIPT"; GUI_SCRIPT=""
 }
 
+# 先以当前用户身份尝试, 真的写不动才提权 (避免装到自己可写目录也弹密码框)
+try_priv() {
+    bash -c "$1" 2>/dev/null && return 0
+    [ "$PRIV_MODE" = "none" ] && { warn "权限不够且无法提权, 跳过: $1"; return 1; }
+    say "普通权限失败, 提权重试: $1"
+    priv "$1"
+}
+
 sha256() {
     if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}';
     else sha256sum "$1" | awk '{print $1}'; fi
@@ -85,7 +93,7 @@ Q="$(command -v curl)"
 if [ "$MODE" = "uninstall" ]; then
     say "卸载 $APP_NAME"
     pkill -x "$APP_NAME" 2>/dev/null || true
-    [ -d "$INSTALL_DIR/$APP_NAME.app" ] && priv "rm -rf '$INSTALL_DIR/$APP_NAME.app'"
+    [ -d "$INSTALL_DIR/$APP_NAME.app" ] && try_priv "rm -rf '$INSTALL_DIR/$APP_NAME.app'"
     [ -f "$HELPER_PATH" ] && priv "rm -f '$HELPER_PATH'"
     flush_priv
     warn "用户配置 (defaults $BUNDLE_ID) 与手势设置已保留, 需要时手动执行: defaults delete $BUNDLE_ID"
@@ -125,18 +133,20 @@ ditto -x -k "$WORK/$ASSET" "$WORK/unpacked"
 [ -d "$WORK/unpacked/$APP_NAME.app" ] || die "包内未找到 $APP_NAME.app"
 
 # ---------- 安装 ----------
-[ -w "$INSTALL_DIR" ] || [ "$(id -u)" = 0 ] || priv "mkdir -p '$INSTALL_DIR'"
+try_priv "mkdir -p '$INSTALL_DIR'"
 if [ -d "$INSTALL_DIR/$APP_NAME.app" ]; then
     say "替换旧版本: $INSTALL_DIR/$APP_NAME.app"
     pkill -x "$APP_NAME" 2>/dev/null || true
-    priv "rm -rf '$INSTALL_DIR/$APP_NAME.app'"
+    try_priv "rm -rf '$INSTALL_DIR/$APP_NAME.app'"
 fi
 flush_priv
-priv "cp -R '$WORK/unpacked/$APP_NAME.app' '$INSTALL_DIR/'"
-priv "chown -R $(id -u):$(id -g) '$INSTALL_DIR/$APP_NAME.app'"
+# rm 在前保证幂等: 上一次 cp 失败留下半个目录时, cp -R 会嵌进去变成 Laomac.app/Laomac.app
+try_priv "rm -rf '$INSTALL_DIR/$APP_NAME.app' && cp -R '$WORK/unpacked/$APP_NAME.app' '$INSTALL_DIR/'"
+# 用 root 拷进以后归属会被改回当前用户, 以便后续升级无需再提权
+try_priv "chown -R $(id -u):$(id -g) '$INSTALL_DIR/$APP_NAME.app'" || true
 
 # 自签名/未公证 → 去掉隔离标记, 免得首次打开被 Gatekeeper 拦
-priv "xattr -dr com.apple.quarantine '$INSTALL_DIR/$APP_NAME.app'" 2>/dev/null || true
+try_priv "xattr -dr com.apple.quarantine '$INSTALL_DIR/$APP_NAME.app'" || true
 
 if [ "$WANT_HELPER" = 1 ]; then
     # 预装 setuid SMC 组件, 让风扇/温度功能不必等首次授权

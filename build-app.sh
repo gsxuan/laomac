@@ -111,11 +111,17 @@ KC="$HOME/Library/Keychains/laomac-sign.keychain-db"
 mkdir -p "$SIGN_DIR"
 
 if [ ! -f "$SIGN_DIR/cert.pem" ] || [ ! -f "$SIGN_DIR/key.pem" ]; then
-    echo "==> 生成本地签名证书 (一次性)..."
-    openssl req -x509 -newkey rsa:2048 \
-        -keyout "$SIGN_DIR/key.pem" -out "$SIGN_DIR/cert.pem" \
-        -days 3650 -nodes -subj "/CN=$IDENTITY" \
-        -addext "extendedKeyUsage=codeSigning" -addext "keyUsage=digitalSignature" >/dev/null 2>&1 || true
+    if [ -n "${CI:-}" ]; then
+        # CI 上生成的临时自签证书下次构建就丢, 还会触发钥匙串访问弹窗卡住构建 → 直接走 ad-hoc
+        echo "==> CI 环境且无入库签名材料, 跳过自签证书生成 (用 ad-hoc 签名)"
+    else
+        echo "==> 生成本地签名证书 (一次性)..."
+        mkdir -p "$SIGN_DIR"
+        openssl req -x509 -newkey rsa:2048 \
+            -keyout "$SIGN_DIR/key.pem" -out "$SIGN_DIR/cert.pem" \
+            -days 3650 -nodes -subj "/CN=$IDENTITY" \
+            -addext "extendedKeyUsage=codeSigning" -addext "keyUsage=digitalSignature" >/dev/null 2>&1 || true
+    fi
 fi
 
 SIGNED=0
