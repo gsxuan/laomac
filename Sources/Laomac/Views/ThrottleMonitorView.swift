@@ -129,8 +129,8 @@ struct ThrottleMonitorView: View {
 
             if fan.curveOn {
                 if let t = fan.curveTemp {
-                    InfoRow(label: "曲线采样温度", value: String(format: "%.1f ℃ → 目标 %@ rpm",
-                            t, NSNumber(value: fan.interpolate(temp: t))))
+                    InfoRow(label: "曲线采样温度",
+                            value: String(format: "%.1f ℃ → 目标 %d rpm", t, fan.interpolate(temp: t)))
                 }
                 ForEach(Array(fan.curvePoints.indices), id: \.self) { i in
                     VStack(spacing: 2) {

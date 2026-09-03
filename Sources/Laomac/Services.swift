@@ -61,7 +61,12 @@ final class ProcessService: ObservableObject {
     /// 降低进程优先级 (renice 值越大优先级越低)
     func renice(_ pid: Int32, value: Int = 15, _ done: ((Bool) -> Void)? = nil) {
         let r = Shell.run("renice +\(value) -p \(pid) 2>&1")
-        done?(r.ok)
+        if !r.ok && r.text.contains("permitted") {
+            // 系统进程需管理员权限, 提权重试 (启动时已授权则静默执行)
+            Shell.runAdminAsync("renice +\(value) -p \(pid)") { res in done?(res.ok) }
+        } else {
+            done?(r.ok)
+        }
     }
 }
 
@@ -216,42 +221,48 @@ final class LaunchAgentsService: ObservableObject {
     /// 启用/禁用启动项: 禁用时先 unload 再移到 .disabled 目录
     /// 系统级 (/Library) 目录无写入权限时自动走管理员通道 (启动时已授权, 不再弹窗)
     func setEnabled(_ item: LaunchAgentItem, enabled: Bool) {
-        let fm = FileManager.default
-        if enabled {
-            let target = (item.path as NSString).deletingLastPathComponent
-                .replacingOccurrences(of: "/.disabled", with: "") + "/" + item.label + ".plist"
-            var moved = true
-            do {
-                try fm.moveItem(atPath: item.path, toPath: target)
-            } catch {
-                moved = !item.isUserScope &&
-                    Shell.runAdmin("mv \(Shell.quote(item.path)) \(Shell.quote(target))").ok
-            }
-            if moved {
-                Shell.run("launchctl load \(Shell.quote(target)) 2>/dev/null")
-                message = "已启用: \(item.label)"
+        // 可能走管理员通道 (阻塞等待授权), 绝不能在主线程执行, 否则界面冻结;
+        // message 是 @Published, 赋值必须回主线程 (refresh 内部已自行回主线程)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let fm = FileManager.default
+            var msg: String
+            if enabled {
+                let target = (item.path as NSString).deletingLastPathComponent
+                    .replacingOccurrences(of: "/.disabled", with: "") + "/" + item.label + ".plist"
+                var moved = true
+                do {
+                    try fm.moveItem(atPath: item.path, toPath: target)
+                } catch {
+                    moved = !item.isUserScope &&
+                        Shell.runAdmin("mv \(Shell.quote(item.path)) \(Shell.quote(target))").ok
+                }
+                if moved {
+                    Shell.run("launchctl load \(Shell.quote(target)) 2>/dev/null")
+                    msg = "已启用: \(item.label)"
+                } else {
+                    msg = "启用失败: \(item.label) (未获得管理员权限)"
+                }
             } else {
-                message = "启用失败: \(item.label) (未获得管理员权限)"
+                let disabledDir = (item.path as NSString).deletingLastPathComponent + "/.disabled"
+                try? fm.createDirectory(atPath: disabledDir, withIntermediateDirectories: true)
+                let target = disabledDir + "/" + item.label + ".plist"
+                Shell.run("launchctl unload \(Shell.quote(item.path)) 2>/dev/null")
+                var moved = true
+                do {
+                    try fm.moveItem(atPath: item.path, toPath: target)
+                } catch {
+                    moved = !item.isUserScope &&
+                        Shell.runAdmin("mkdir -p \(Shell.quote(disabledDir)) && mv \(Shell.quote(item.path)) \(Shell.quote(target))").ok
+                }
+                msg = moved ? "已禁用: \(item.label) (重启后完全生效)"
+                            : "禁用失败: \(item.label) (未获得管理员权限)"
             }
-        } else {
-            let disabledDir = (item.path as NSString).deletingLastPathComponent + "/.disabled"
-            try? fm.createDirectory(atPath: disabledDir, withIntermediateDirectories: true)
-            let target = disabledDir + "/" + item.label + ".plist"
-            Shell.run("launchctl unload \(Shell.quote(item.path)) 2>/dev/null")
-            var moved = true
-            do {
-                try fm.moveItem(atPath: item.path, toPath: target)
-            } catch {
-                moved = !item.isUserScope &&
-                    Shell.runAdmin("mkdir -p \(Shell.quote(disabledDir)) && mv \(Shell.quote(item.path)) \(Shell.quote(target))").ok
-            }
-            if moved {
-                message = "已禁用: \(item.label) (重启后完全生效)"
-            } else {
-                message = "禁用失败: \(item.label) (未获得管理员权限)"
+            DispatchQueue.main.async {
+                self.message = msg
+                self.refresh()
             }
         }
-        refresh()
     }
 
     func reveal(_ item: LaunchAgentItem) {
@@ -419,11 +430,17 @@ final class CleanService: ObservableObject {
         running = true
         let path = target.path
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let r = Shell.run("find \(Shell.quote(path)) -mindepth 1 -delete 2>/dev/null; exit 0")
+            // 以清理前后占用对比判定成败: find 即使部分文件删不掉也可能返回 0, 退出码不可信
+            let before = Shell.dirSizeKB(path)
+            Shell.run("find \(Shell.quote(path)) -mindepth 1 -delete 2>/dev/null")
+            let after = Shell.dirSizeKB(path)
+            let freed = max(0, before - after)
+            let ok = after == 0 || freed > 0 || before == 0
             DispatchQueue.main.async {
                 self?.running = false
-                self?.message = r.ok ? "已清理: \(target.name)" : "清理失败: \(target.name)"
-                done(r.ok)
+                self?.message = ok ? "已清理: \(target.name), 释放 \(Shell.humanSize(freed))"
+                                   : "清理失败: \(target.name) (文件可能被占用)"
+                done(ok)
                 self?.refresh()
             }
         }
@@ -671,7 +688,14 @@ final class TuneService: ObservableObject {
         items = TuneService.presets.map { title, domain, key, onValue, offValue in
             let r = Shell.run("defaults read \(domain) \(key) 2>/dev/null")
                 .text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let expectedOn = onValue.split(separator: " ").last.map(String.init) ?? ""
+            let parts = onValue.split(separator: " ").map(String.init)
+            // defaults read 对 bool 输出 1/0 而非 true/false, 直接比较会导致开关状态永远误判为关
+            let expectedOn: String
+            if parts.count == 2, parts[0] == "-bool" {
+                expectedOn = parts[1] == "true" ? "1" : "0"
+            } else {
+                expectedOn = parts.last ?? ""
+            }
             let isOn = !r.isEmpty && r == expectedOn
             return TuneItem(title: title, domain: domain, key: key,
                             onValue: onValue, offValue: offValue, isOn: isOn)

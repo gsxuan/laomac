@@ -300,8 +300,11 @@ final class PowerService: ObservableObject {
     // 仅在 app 运行期间生效 (与 AlDente 免费版同级限制)。
 
     /// 每次电池采样后调用; force=true 时忽略去抖立即施加 (开启时/写失败重试)
+    /// CHBI 连续写失败计数 (只读键机型写永远失败, 不能无限重试)
+    private var chargeWriteFailures = 0
+
     private func tickChargeLimit(force: Bool = false) {
-        guard maintainOn, Self.smcToolPath != nil, info.percent > 0 else { return }
+        guard maintainOn, PrivilegedTool.activePath != nil, info.percent > 0 else { return }
         let limit = Int(limitPercent)
         let target: Bool
         if chargeInhibited {
@@ -318,16 +321,24 @@ final class PowerService: ObservableObject {
             guard let self = self else { return }
             self.limitLoading = false
             if r.ok {
+                self.chargeWriteFailures = 0
                 self.chargeInhibited = target
                 self.message = target
                     ? "🔋 电量达 \(Int(self.info.percent))%, 已暂停充电 (上限 \(limit)%)"
                     : "🔋 电量降至 \(Int(self.info.percent))%, 已恢复充电"
             } else if self.maintainOn {
-                // 写失败: 30s 后的下次采样重试 (force 避免去抖拦截)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-                    self?.tickChargeLimit(force: true)
+                self.chargeWriteFailures += 1
+                if self.chargeWriteFailures >= 3 {
+                    // 熔断: 部分机型 CHBI 只读, 写永远失败 — 自动关闭维持模式, 停止无意义重试刷屏
+                    self.maintainOn = false
+                    self.message = "充电限制连续写入失败 (该机型可能不支持), 维持模式已自动关闭"
+                } else {
+                    // 写失败: 30s 后的下次采样重试 (force 避免去抖拦截)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                        self?.tickChargeLimit(force: true)
+                    }
+                    self.message = "充电限制写入失败: \(r.text.prefix(60))"
                 }
-                self.message = "充电限制写入失败: \(r.text.prefix(60))"
             }
         }
     }

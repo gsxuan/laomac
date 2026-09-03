@@ -159,13 +159,32 @@ final class ThermalService: ObservableObject {
                 handled.insert(p.pid)
                 switch action {
                 case .renice:
-                    let ok = Shell.run("renice +15 -p \(p.pid) 2>/dev/null").ok
-                    log(ok ? "🛡️ 已降低 \(p.name) (PID \(p.pid)) 优先级"
-                           : "降低优先级失败: \(p.name) (可能需要管理员权限)")
+                    let pid = p.pid, name = p.name
+                    if Shell.run("renice +15 -p \(pid) 2>/dev/null").ok {
+                        log("🛡️ 已降低 \(name) (PID \(pid)) 优先级")
+                    } else {
+                        // 系统进程需提权; 后台执行避免阻塞主线程, 启动时已授权则静默成功
+                        DispatchQueue.global(qos: .utility).async { [weak self] in
+                            let ok = Shell.runAdmin("renice +15 -p \(pid)").ok
+                            DispatchQueue.main.async {
+                                self?.log(ok ? "🛡️ 已降低 \(name) (PID \(pid)) 优先级"
+                                             : "降低优先级失败: \(name)")
+                            }
+                        }
+                    }
                 case .kill:
-                    let ok = Shell.run("kill -9 \(p.pid) 2>/dev/null").ok
-                    log(ok ? "⛔ 已结束高耗进程 \(p.name) (PID \(p.pid))"
-                           : "结束失败: \(p.name) (可能需要管理员权限)")
+                    let pid = p.pid, name = p.name
+                    if Shell.run("kill -9 \(pid) 2>/dev/null").ok {
+                        log("⛔ 已结束高耗进程 \(name) (PID \(pid))")
+                    } else {
+                        DispatchQueue.global(qos: .utility).async { [weak self] in
+                            let ok = Shell.runAdmin("kill -9 \(pid)").ok
+                            DispatchQueue.main.async {
+                                self?.log(ok ? "⛔ 已结束高耗进程 \(name) (PID \(pid))"
+                                             : "结束失败: \(name)")
+                            }
+                        }
+                    }
                 case .notify:
                     log("🔔 提醒: \(p.name) (PID \(p.pid)) CPU 达 \(Int(p.cpu))%")
                 }
@@ -187,8 +206,17 @@ final class ThermalService: ObservableObject {
         }
         let myPid = ProcessInfo.processInfo.processIdentifier
         for p in procs where p.pid != myPid {
-            let ok = Shell.run("renice +15 -p \(p.pid) 2>/dev/null").ok
-            log(ok ? "🛡️ 已压制 \(p.name) (PID \(p.pid))" : "压制失败: \(p.name)")
+            let pid = p.pid, name = p.name
+            if Shell.run("renice +15 -p \(pid) 2>/dev/null").ok {
+                log("🛡️ 已压制 \(name) (PID \(pid))")
+            } else {
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    let ok = Shell.runAdmin("renice +15 -p \(pid)").ok
+                    DispatchQueue.main.async {
+                        self?.log(ok ? "🛡️ 已压制 \(name) (PID \(pid))" : "压制失败: \(name)")
+                    }
+                }
+            }
         }
     }
 
