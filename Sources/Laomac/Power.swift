@@ -223,7 +223,7 @@ final class PowerService: ObservableObject {
         guard PrivilegedTool.activePath != nil else {
             DispatchQueue.main.async {
                 self.limitAvailable = false
-                self.message = "未找到 smctool, 请用 ./build-app.sh 打包后使用"
+                self.message = "未找到 smctool 组件, 请重新安装 Laomac.app 后重启"
             }
             return
         }
@@ -233,7 +233,7 @@ final class PowerService: ObservableObject {
     func refreshChargeLimit() {
         guard let tool = PrivilegedTool.activePath else {
             limitAvailable = false
-            message = "未找到 smctool, 请用 ./build-app.sh 打包后使用"
+            message = "未找到 smctool 组件, 请重新安装 Laomac.app 后重启"
             return
         }
         limitLoading = true

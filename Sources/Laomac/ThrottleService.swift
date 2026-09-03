@@ -99,6 +99,16 @@ final class FanController: ObservableObject {
         PrivilegedTool.run(args) { r in done(r) }
     }
 
+    /// 申请安装/更新 SMC 特权组件 (首次需管理员授权, 之后永久免密码)
+    func installHelper(_ done: @escaping (Bool) -> Void) {
+        PrivilegedTool.installIfNeeded { [weak self] ok in
+            guard let self else { done(false); return }
+            self.available = PrivilegedTool.activePath != nil
+            if self.available { self.refresh() }
+            done(ok)
+        }
+    }
+
     /// 刷新风扇实时状态 (已安装特权组件时免密码)
     func refresh() {
         run("faninfo") { [weak self] r in

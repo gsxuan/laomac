@@ -1,0 +1,53 @@
+name: Release
+
+# 推送 v1.2 这样的 tag 即自动出包发布; 也可在 Actions 页面手动触发 (走最新 main 的 VERSION)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# 只用 secrets.GITHUB_TOKEN, 不引入第三方 token; 也不读取任何 issue/PR/comment 载荷
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    env:
+      # 事件载荷一律经环境变量传递, 不直接插值进 shell
+      LAOMAC_EVENT: ${{ github.event_name }}
+      LAOMAC_REF: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要完整 tag 历史来生成"自上一版以来的改动"说明
+          fetch-depth: 0
+
+      - name: 解析版本号
+        id: ver
+        run: |
+          if [ "$LAOMAC_EVENT" = "push" ]; then
+            TAG="$LAOMAC_REF"
+          else
+            TAG="v$(tr -d '[:space:]' < VERSION)"
+          fi
+          # 严格白名单: 只接受 vX.Y(.Z), 防止把 ref 内容当 shell 执行
+          case "$TAG" in
+            v[0-9]*.[0-9]*) ;;
+            *) echo "非法 tag 名: $TAG" >&2; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: 构建通用包并发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LAOMAC_TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          chmod +x build-app.sh release.sh install.sh
+          ./release.sh "$LAOMAC_TAG" -y
+
+      - name: 冒烟检查产物
+        run: |
+          ls -lh dist/
+          lipo -archs dist/Laomac.app/Contents/MacOS/Laomac
+          codesign --verify --deep dist/Laomac.app && echo "签名校验通过"

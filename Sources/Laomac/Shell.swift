@@ -211,19 +211,57 @@ enum PrivilegedTool {
         FileManager.default.isExecutableFile(atPath: installPath)
     }
 
-    /// 优先用已安装的特权组件 (免提权), 否则回退 Bundle 内版本 (需 AEWP 提权)
-    static var activePath: String? {
-        if installed { return installPath }
+    /// app 包内置的 smctool (随 dmg/zip 分发的那个)
+    static var bundledPath: String? {
         if let p = Bundle.main.path(forResource: "smctool", ofType: nil),
            FileManager.default.isExecutableFile(atPath: p) { return p }
+        return nil
+    }
+
+    /// 开发模式 (swift run) 下项目目录里的 smctool
+    static var devPath: String? {
         let dev = FileManager.default.currentDirectoryPath + "/smctool"
         return FileManager.default.isExecutableFile(atPath: dev) ? dev : nil
     }
 
-    /// 安装 setuid 组件: 仅首次需要管理员授权, 之后所有 SMC 操作不再弹窗
+    /// 优先用已安装的特权组件 (免提权), 否则回退 Bundle 内版本 (需 AEWP 提权)
+    static var activePath: String? {
+        if installed { return installPath }
+        return bundledPath ?? devPath
+    }
+
+    /// 本次启动是否已做过版本比对 (避免每次调用都拉起子进程)
+    private static var versionChecked = false
+
+    /// 安装/升级 setuid 组件: 仅首次需要管理员授权, 之后所有 SMC 操作不再弹窗;
+    /// app 升级后内置组件版本变高, 会自动再申请一次授权把系统里的旧组件换掉,
+    /// 否则新增的 smctool 子命令 (如 write16 / fanset 多参数) 会永远报"未知命令"
     static func installIfNeeded(_ done: @escaping (Bool) -> Void) {
-        if installed { done(true); return }
-        guard let src = activePath else { done(false); return }
+        guard installed else {
+            guard let src = activePath else { done(false); return }
+            install(src: src, done)
+            return
+        }
+        // 只在跑的是打包后的 .app 时做版本自愈: 开发目录里的 smctool 可能是旧编译产物,
+        // 拿它覆盖系统组件反而是倒退
+        guard !versionChecked, let src = bundledPath else { done(true); return }
+        versionChecked = true
+        Shell.runAsync("\(Shell.quote(src)) version 2>/dev/null") { local in
+            let want = local.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            Shell.runAsync("\(Shell.quote(self.installPath)) version 2>/dev/null") { got in
+                let have = got.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                // 读不到版本 (旧组件没有 version 子命令) 或版本不一致 → 重装
+                guard !want.isEmpty, want != have else {
+                    if want.isEmpty { NSLog("[Laomac] 内置 smctool 无 version 子命令, 跳过组件自检") }
+                    done(true); return
+                }
+                NSLog("[Laomac] 特权组件版本 \(have) 落后于内置 \(want), 申请更新")
+                self.install(src: src) { ok in done(ok || self.installed) }
+            }
+        }
+    }
+
+    private static func install(src: String, _ done: @escaping (Bool) -> Void) {
         let q = installPath
         let cmd = "mkdir -p /Library/PrivilegedHelperTools && " +
                   "cp \(Shell.quote(src)) \(Shell.quote(q)) && " +

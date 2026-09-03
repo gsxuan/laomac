@@ -4,6 +4,36 @@
 
 纯 Swift + SwiftPM 构建，**不依赖 Xcode、无第三方 Swift 依赖**，仅需 Command Line Tools。
 
+## 下载安装
+
+[![Release](https://img.shields.io/github/v/release/gsxuan/laomac?label=%E4%B8%8B%E8%BD%BD)](https://github.com/gsxuan/laomac/releases/latest)
+
+**方式一 · 一行脚本（推荐）**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gsxuan/laomac/main/install.sh | bash
+```
+
+自动拉最新通用包（arm64 + x86_64）→ 校验 sha256 → 放进「应用程序」→ 去掉隔离标记
+→ 装 SMC 特权组件（只弹一次管理员密码）。卸载：同一命令加 `-- --uninstall`。
+
+**方式二 · GitHub Releases**
+
+到 [Releases](https://github.com/gsxuan/laomac/releases/latest) 下 `Laomac-<版本>.dmg`，
+把 Laomac 拖进 Applications。
+
+**方式三 · Homebrew**（需先按 [packaging/README.md](packaging/README.md) 建好 tap 仓库）
+
+```bash
+brew tap gsxuan/tap && brew install --cask laomac
+```
+
+> 本软件用本地自签名证书打包，**未做 Apple 公证**（无开发者账号）。手动下载首次打开会被
+> Gatekeeper 拦一下，任选其一：在访达里 **右键 Laomac → 打开**；或
+> `sudo xattr -dr com.apple.quarantine /Applications/Laomac.app`。方式一/三已自动处理。
+
+发版与打包细节见 [packaging/README.md](packaging/README.md)。
+
 ## 功能
 
 | 模块 | 说明 |
@@ -37,6 +67,13 @@
 # 打包为 Laomac.app (release 编译 + 打包 smctool + 稳定签名)
 ./build-app.sh
 open dist/Laomac.app
+
+# 出通用包 (arm64 + x86_64, 分发给别人时必须)：两架构交叉编译后 lipo 合并
+LAOMAC_UNIVERSAL=1 ./build-app.sh
+
+# 发布到 GitHub Releases (通用包 + dmg/zip + 校验和 + tag)
+./release.sh v1.2 -n   # dry-run 先看产物
+./release.sh v1.2      # 正式发版
 ```
 
 `build-app.sh` 会用本地自签名证书（首次自动生成于 `signing/`）做**稳定签名**，
@@ -46,7 +83,7 @@ open dist/Laomac.app
 
 | 权限 | 用途 | 获取方式 |
 |---|---|---|
-| 管理员 | SMC 读写、系统级 LaunchAgents、结束系统进程、低功耗模式、定时开关机 | 启动时弹一次系统密码框（`AuthorizationExecuteWithPrivileges` 通道，之后静默复用） |
+| 管理员 | SMC 读写、系统级 LaunchAgents、结束系统进程、低功耗模式、定时开关机 | 启动时弹一次系统密码框（`AuthorizationExecuteWithPrivileges` 通道，之后静默复用）；SMC 组件装成 setuid 后这类操作不再弹框 |
 | 辅助功能 | 鼠标手势全局右键监听 | 系统设置手动授权（稳定签名保证授权持久） |
 | 通知 | 降频警告推送 | 系统设置 → 通知 → Laomac |
 

@@ -255,7 +255,7 @@ final class ThermalService: ObservableObject {
     func refreshSensorList() {
         guard !sensorsLoading else { return }
         guard PrivilegedTool.activePath != nil else {
-            log("未找到 smctool, 请用 ./build-app.sh 打包后使用")
+            log("未找到 smctool 组件, 请重新安装 Laomac.app 后重启")
             return
         }
         sensorsLoading = true

@@ -6,6 +6,16 @@ cd "$(dirname "$0")"
 APP_NAME="Laomac"
 APP_DIR="dist/${APP_NAME}.app"
 
+# 单一版本号源: 仓库根 VERSION 文件 (release.sh / CI 打包与 gh release tag 均以此为准),
+# 可用环境变量 LAOMAC_VERSION 临时覆盖 (CI 从 git tag 推导时使用)
+APP_VERSION="${LAOMAC_VERSION:-}"
+if [ -z "$APP_VERSION" ] && [ -f VERSION ]; then
+    APP_VERSION="$(tr -d '[:space:]' < VERSION)"
+fi
+APP_VERSION="${APP_VERSION:-1.0}"
+APP_BUILD="${APP_BUILD:-$APP_VERSION}"
+echo "==> 版本: ${APP_VERSION} (build ${APP_BUILD})"
+
 # 旧版本在运行时 codesign 会报 Operation not permitted, 先退出
 if pgrep -f "$(pwd)/$APP_DIR/Contents/MacOS/$APP_NAME" >/dev/null 2>&1; then
     echo "==> 检测到 ${APP_NAME} 正在运行, 先退出..."
@@ -13,15 +23,30 @@ if pgrep -f "$(pwd)/$APP_DIR/Contents/MacOS/$APP_NAME" >/dev/null 2>&1; then
     sleep 2
 fi
 
-echo "==> 编译 release 版本..."
-swift build -c release
+if [ "${LAOMAC_UNIVERSAL:-0}" = "1" ]; then
+    # 发布包: arm64 + x86_64 两个切片分别交叉编译后 lipo 合并,
+    # 仅靠 CommandLineTools 即可产出通用二进制 (无需 Xcode 的 XCBuild)
+    echo "==> 编译通用二进制 (arm64 + x86_64)..."
+    mkdir -p .build/universal
+    SRCS="$(find Sources -name '*.swift' | sort)"
+    for A in arm64 x86_64; do
+        echo "    - ${A}"
+        swiftc -O -target "${A}-apple-macosx13.0" $SRCS -o ".build/universal/${APP_NAME}-${A}"
+    done
+    lipo -create -output ".build/universal/${APP_NAME}" \
+        .build/universal/${APP_NAME}-arm64 .build/universal/${APP_NAME}-x86_64
+    BIN=".build/universal/${APP_NAME}"
+else
+    echo "==> 编译 release 版本 (本机架构)..."
+    swift build -c release
+    BIN=".build/release/${APP_NAME}"
+fi
 
-echo "==> 生成 ${APP_DIR} ..."
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-cp ".build/release/${APP_NAME}" "$APP_DIR/Contents/MacOS/${APP_NAME}"
+cp "$BIN" "$APP_DIR/Contents/MacOS/${APP_NAME}"
 
-cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -37,11 +62,11 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${APP_BUILD}</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
@@ -71,8 +96,10 @@ else
 fi
 
 # 编译 SMC 读写工具 (充电限制等功能需要, 以 root 运行)
-echo "==> 编译 smctool..."
-cc -O2 -o "$APP_DIR/Contents/Resources/smctool" smctool.c \
+# 始终编成通用包: 它是独立的 setuid 二进制, 必须与宿主机架构匹配
+echo "==> 编译 smctool (arm64 + x86_64)..."
+cc -O2 -arch arm64 -arch x86_64 -DSMCTOOL_VERSION="\"${APP_VERSION}\"" \
+    -o "$APP_DIR/Contents/Resources/smctool" smctool.c \
     -framework IOKit -framework CoreFoundation
 chmod +x "$APP_DIR/Contents/Resources/smctool"
 
@@ -121,4 +148,5 @@ if ! codesign --verify "$APP_DIR" 2>/dev/null; then
 fi
 
 echo "==> 完成: $(pwd)/$APP_DIR"
+echo "    架构: $(lipo -archs "$APP_DIR/Contents/MacOS/$APP_NAME")  版本: $APP_VERSION"
 echo "    启动: open $APP_DIR"

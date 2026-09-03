@@ -395,10 +395,19 @@ static void dbg_read(const char *name) {
     printf("\n");
 }
 
+#ifndef SMCTOOL_VERSION
+#define SMCTOOL_VERSION "dev"
+#endif
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "用法: smctool read <KEY> | smctool write <KEY> <VALUE> | smctool faninfo | smctool fanset <N> <RPM>|auto\n");
         return 2;
+    }
+    // version 不需要 root 也不碰 SMC: 供 app 比对已安装特权组件是否过期
+    if (strcmp(argv[1], "version") == 0) {
+        printf("%s\n", SMCTOOL_VERSION);
+        return 0;
     }
     // macOS 15 起 AuthorizationExecuteWithPrivileges 只抬 euid 不抬 uid,
     // 故用 geteuid 判断; 再 setuid(0) 把 uid 也补齐, 兼容所有调用方式

@@ -83,8 +83,14 @@ struct ThrottleMonitorView: View {
                 Text("手动定速/曲线/联动期间风扇不受系统控制; 恢复自动后交还 SMC 调速。三种手动模式互斥, 后启用者生效; 重启后 SMC 复位为自动, 曲线开关随 app 启动自动恢复。")
                     .font(.caption2).foregroundColor(.secondary)
             } else {
-                Text("未找到 smctool, 请用 ./build-app.sh 打包后使用")
+                Text("未找到 SMC 组件 smctool (应随 app 一起分发), 风扇控制不可用。")
                     .font(.caption).foregroundColor(.secondary)
+                Button("安装 / 更新 SMC 组件") {
+                    app.throttle.fan.installHelper { ok in
+                        if !ok { app.throttle.fan.available = false }
+                    }
+                }
+                .buttonStyle(.bordered)
             }
         }
     }
